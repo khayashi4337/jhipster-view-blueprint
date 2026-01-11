@@ -1,0 +1,39 @@
+{
+  "name": "generator-jhipster-view-blueprint",
+  "version": "0.0.1",
+  "description": "JHipster blueprint for database view support",
+  "keywords": [
+    "yeoman-generator",
+    "jhipster-blueprint",
+    "jhipster-8",
+    "database-view",
+    "liquibase"
+  ],
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./generators/app/index.js",
+    "./generators/*": "./generators/*/index.js",
+    "./generators/*/index.js": "./generators/*/index.js",
+    "./generators/*/generator.js": "./generators/*/generator.js"
+  },
+  "main": "generators/app/index.js",
+  "files": [
+    "generators",
+    "templates"
+  ],
+  "scripts": {
+    "prettier:check": "prettier --check \"{,**/}*.{md,json,yml,js}\"",
+    "prettier:format": "prettier --write \"{,**/}*.{md,json,yml,js}\"",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "generator-jhipster": "8.11.0"
+  },
+  "devDependencies": {
+    "prettier": "3.4.2"
+  },
+  "engines": {
+    "node": "^18.19.0 || >= 20.6.1"
+  }
+}

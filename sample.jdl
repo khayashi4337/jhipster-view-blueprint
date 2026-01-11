@@ -1,0 +1,47 @@
+/**
+ * Sample JDL for JHipster View Blueprint
+ * Demonstrates how to define database views using custom annotations
+ */
+
+// Example 1: Simple view with inline SQL
+@View
+@Sql("SELECT id, name, email FROM jhi_user")
+entity UserSummary {
+    name String required
+    email String
+}
+
+// Example 2: Complex view with SQL file reference
+@View
+@SqlFile("views/order_statistics.sql")
+entity OrderStatistics {
+    customerId Long
+    customerName String
+    totalOrders Integer
+    totalAmount BigDecimal
+    lastOrderDate Instant
+}
+
+// Regular entities (for reference)
+entity Customer {
+    name String required
+    email String required
+}
+
+entity Order {
+    orderDate Instant required
+    totalAmount BigDecimal required
+    status OrderStatus required
+}
+
+enum OrderStatus {
+    PENDING
+    CONFIRMED
+    SHIPPED
+    DELIVERED
+    CANCELLED
+}
+
+relationship ManyToOne {
+    Order{customer required} to Customer
+}
