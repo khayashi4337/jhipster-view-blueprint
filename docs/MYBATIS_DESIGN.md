@@ -1,11 +1,10 @@
 # MyBatis対応 設計メモ
 
-## 背景
+## 想定
 
-- 移行プロジェクトでMyBatisを使用する要件がある
 - マスタ管理系はJPA、業務系はMyBatisという構成
 - マテリアルビューを多用しており、View + MyBatisの組み合わせが必要
-- プロジェクトリーダーの決定事項
+
 
 ## 構成
 
@@ -16,9 +15,8 @@
 
 ## 方針
 
-### 別ブループリントではなく、このリポジトリを拡張
+### 別ブループリントではなく、このjhipster-view-blueprintリポジトリを拡張する理由
 
-**理由:**
 - `@View` の意味（読み取り専用、SQL情報）を別ブループリントは知らない
 - 共通ライブラリ化は管理が複雑
 - 一元管理の方が現実的
@@ -27,24 +25,23 @@
 
 | JDLの記述 | 生成結果 |
 |-----------|----------|
+| （アノテーションなし） | JPA Entity + Repository |
 | `@View` のみ | JPA Entity (@Immutable) + Repository |
 | `@View` + `@MyBatis` | MyBatis POJO + Mapper Interface (読み取り専用) |
 | `@MyBatis` のみ | MyBatis POJO + Mapper Interface (CRUD) |
 
-追加のオプションスイッチは不要。`@MyBatis` を書かなければ従来通りJPA。
+`@View` / `@MyBatis` をどちらも書かなければ従来通りJPAのみ。
 
 ## 生成物の詳細
 
 ### MyBatis POJO (Entity)
 
 ```java
-// JPAアノテーションなし、シンプルなPOJO
+@Data
 public class OrderSummary {
     private Long id;
     private String customerName;
     private Integer totalOrders;
-
-    // getter/setter (または Lombok @Data)
 }
 ```
 
@@ -90,49 +87,58 @@ public interface CustomerMapper {
 
 | 項目 | JPA | MyBatis |
 |------|-----|---------|
-| クラスアノテーション | `@Entity`, `@Table`, `@Immutable` | なし |
+| クラスアノテーション | `@Entity`, `@Table`, `@Immutable` | なし（`@Data` のみ） |
 | フィールドアノテーション | `@Id`, `@Column` | なし |
 | マッピング | アノテーション/XML | Mapper側で定義 |
+| EntityManager | ✅ 管理対象 | ❌ 管理対象外 |
 
-## 生成しないもの
+### クラス共存について
 
-`@MyBatis` 指定時は以下を生成しない：
+JPA EntityとMyBatis POJOは別クラスとして共存可能。
 
-- JPA Entity
-- JPA Repository
-- REST Controller
-- Service
+- JPA Entity: `@Entity` あり → EntityManager管理対象
+- MyBatis POJO: `@Entity` なし → EntityManager管理対象外
 
-## 未決事項
+**パッケージ分離:**
 
-### 1. Lombokの使用
+```
+src/main/java/com/example/
+├── domain/              # JPA Entity（EntityManager管理）
+│   └── Customer.java    # @Entity あり
+└── mybatis/model/       # MyBatis POJO（管理対象外）
+    └── CustomerDto.java # @Entity なし、@Data あり
+```
 
-- `@Data` を使うか、getter/setterを生成するか
-- JHipster本体の設定に合わせる？
+## 決定事項
 
-### 2. Mapper XMLの要否
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| Lombok | `@Data` を使用 | シンプルなPOJO生成 |
+| Mapper XML | 生成しない | マテリアルビューが複雑なSQLを吸収、Mapperは単純なSELECTのみ |
+| MyBatis設定 | Needleで自動追記 | `application.yml` に安全に追記可能 |
+| Controller | 対象外 | 既存システムの画面を再現するため手書き |
 
-- 現時点では「複雑なクエリはない」とのことでアノテーションベースで十分
-- 将来的に必要になれば追加検討
+### MyBatis設定の自動追記
 
-### 3. MyBatis設定ファイル
+JHipsterのNeedle機能を使用して `application.yml` に追記：
 
-- `mybatis-config.xml` や Spring Boot設定の自動生成は必要か
-- 手動設定で十分か
-
-### 4. フロントエンド（Thymeleaf）との連携
-
-- Controller層の生成は不要（手書き想定）
-- Mapper Interfaceを直接DIして使用
+```yaml
+# jhipster-needle-application-properties
+mybatis:
+  type-aliases-package: com.example.mybatis.model
+  configuration:
+    map-underscore-to-camel-case: true
+```
 
 ## 実装ステップ（案）
 
 1. `@MyBatis` アノテーションの検出ロジック追加
-2. MyBatis POJO テンプレート作成
-3. Mapper Interface テンプレート作成
-4. `@View` + `@MyBatis` の組み合わせ対応
-5. `@MyBatis` のみ（CRUD）の対応
-6. テスト
+2. MyBatis POJO テンプレート作成（`@Data` 付き）
+3. Mapper Interface テンプレート作成（アノテーションベース）
+4. `application.yml` へのNeedle追記実装
+5. `@View` + `@MyBatis` の組み合わせ対応
+6. `@MyBatis` のみ（CRUD）の対応
+7. テスト
 
 ## 参考
 
