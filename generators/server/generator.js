@@ -103,6 +103,13 @@ export default class extends BaseApplicationGenerator {
           } catch (error) {
             this.log.error(`Failed to modify service for ${entity.name}: ${error.message}`);
           }
+
+          // Make Integration Test read-only
+          try {
+            this._makeIntegrationTestReadOnly(application, packagePath, entity);
+          } catch (error) {
+            this.log.error(`Failed to modify integration test for ${entity.name}: ${error.message}`);
+          }
         }
       },
     });
@@ -242,6 +249,90 @@ export default class extends BaseApplicationGenerator {
     });
   }
 
+  /**
+   * Make Integration Test read-only by disabling tests that require data insertion
+   * View entities cannot use saveAndFlush/delete operations
+   */
+  _makeIntegrationTestReadOnly(application, packagePath, entity) {
+    const srcTestJava = application.srcTestJava || 'src/test/java/';
+    const testFilePath = `${srcTestJava}${packagePath}/web/rest/${entity.entityClass}ResourceIT.java`;
+
+    if (!this.existsDestination(testFilePath)) {
+      this.log.debug(`Integration test not found for ${entity.name}, skipping`);
+      return;
+    }
+
+    this.log.info(`Making Integration Test read-only for ${entity.name}`);
+    this.editFile(testFilePath, content => {
+      const originalContent = content;
+      const modifications = [];
+
+      // Detect line ending style
+      const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
+
+      // Add @Disabled import if not present
+      if (!content.includes('import org.junit.jupiter.api.Disabled;')) {
+        const explicitImport = /import org\.junit\.jupiter\.api\.Test;/;
+        const wildcardImport = /import org\.junit\.jupiter\.api\.\*;/;
+
+        if (explicitImport.test(content)) {
+          content = content.replace(
+            explicitImport,
+            `import org.junit.jupiter.api.Disabled;${lineEnding}import org.junit.jupiter.api.Test;`
+          );
+          modifications.push('@Disabled import');
+        } else if (wildcardImport.test(content)) {
+          // Wildcard import already covers @Disabled
+          this.log.debug(`Using wildcard import - @Disabled already available in ${entity.name}`);
+        } else {
+          // Fallback: add import after package statement
+          content = content.replace(/^(package\s+[^;]+;)/m,
+            `$1${lineEnding}${lineEnding}import org.junit.jupiter.api.Disabled;`);
+          modifications.push('@Disabled import (fallback)');
+          this.log.warn(`Added @Disabled import after package statement in ${testFilePath}`);
+        }
+      }
+
+      // Add @Disabled annotation to the test class (check for annotation at class level, not just substring)
+      const hasDisabledAnnotation = /@Disabled\s*(?:\([^)]*\))?\s*[\r\n]/.test(content);
+      if (!hasDisabledAnnotation) {
+        const newContent = content.replace(
+          /(@IntegrationTest\s*[\r\n]+)/,
+          `$1@Disabled("View entity tests are disabled - @Immutable entities cannot use saveAndFlush/delete operations")${lineEnding}`
+        );
+        if (newContent !== content) {
+          content = newContent;
+          modifications.push('@Disabled annotation');
+        }
+      }
+
+      // Add documentation comment
+      const viewTestMarker = 'This test class is disabled because the entity is a database view';
+      if (!content.includes(viewTestMarker)) {
+        // More flexible pattern that handles singular/plural and different whitespace
+        const javadocPattern = /\/\*\*\s*[\r\n]+\s*\*\s*Integration tests? for/i;
+        if (javadocPattern.test(content)) {
+          content = content.replace(
+            javadocPattern,
+            `/**${lineEnding} * ${viewTestMarker}.${lineEnding} * @Immutable entities cannot be persisted or deleted via JPA repository.${lineEnding} * To test view queries, use native SQL to populate the underlying table.${lineEnding} *${lineEnding} * Integration tests for`
+          );
+          modifications.push('Javadoc comment');
+        } else {
+          this.log.warn(`Could not find standard Javadoc pattern in ${testFilePath}`);
+        }
+      }
+
+      // Log modification summary
+      if (content === originalContent) {
+        this.log.warn(`No modifications made to ${testFilePath} - file may already be modified or patterns don't match`);
+      } else if (modifications.length > 0) {
+        this.log.info(`Applied modifications to ${entity.name} test: ${modifications.join(', ')}`);
+      }
+
+      return content;
+    });
+  }
+
   // ============================================
   // Java code parsing utilities
   // ============================================
@@ -339,6 +430,8 @@ export default class extends BaseApplicationGenerator {
    * @returns {string} - Modified source code
    */
   _removeMethodByAnnotation(content, annotation) {
+    // Detect and preserve line ending style
+    const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
     const lines = content.split(/\r?\n/);
     const result = [];
     let i = 0;
@@ -382,7 +475,7 @@ export default class extends BaseApplicationGenerator {
       }
     }
 
-    return result.join('\n');
+    return result.join(lineEnding);
   }
 
   /**
@@ -393,6 +486,8 @@ export default class extends BaseApplicationGenerator {
    * @returns {string} - Modified source code
    */
   _removeMethodBySignature(content, signaturePattern) {
+    // Detect and preserve line ending style
+    const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
     const lines = content.split(/\r?\n/);
     const result = [];
     let i = 0;
@@ -421,7 +516,7 @@ export default class extends BaseApplicationGenerator {
       }
     }
 
-    return result.join('\n');
+    return result.join(lineEnding);
   }
 
   // ============================================
