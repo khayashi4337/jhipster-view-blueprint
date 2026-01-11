@@ -97,8 +97,136 @@ export default class extends BaseApplicationGenerator {
               return content;
             });
           }
+
+          // Make REST API read-only (remove POST/PUT/PATCH/DELETE endpoints)
+          const resourceFilePath = `${application.srcMainJava}${packagePath}/web/rest/${entity.entityClass}Resource.java`;
+
+          if (this.existsDestination(resourceFilePath)) {
+            this.log.info(`Making REST API read-only for ${entity.name}`);
+            this.editFile(resourceFilePath, content => {
+              // Remove @PostMapping method (create)
+              content = this._removeMethodByAnnotation(content, '@PostMapping');
+              // Remove @PutMapping method (update)
+              content = this._removeMethodByAnnotation(content, '@PutMapping');
+              // Remove @PatchMapping method (partial update)
+              content = this._removeMethodByAnnotation(content, '@PatchMapping');
+              // Remove @DeleteMapping method (delete)
+              content = this._removeMethodByAnnotation(content, '@DeleteMapping');
+
+              // Add comment to class indicating read-only
+              if (!content.includes('Read-only REST controller for database view')) {
+                content = content.replace(
+                  /(@RestController\n@RequestMapping)/,
+                  `/**\n * Read-only REST controller for database view: ${entity.entityTableName}\n * POST/PUT/PATCH/DELETE operations are not supported for views.\n */\n$1`
+                );
+              }
+
+              // Remove unused imports
+              content = this._removeUnusedImports(content);
+
+              return content;
+            });
+          }
+
+          // Make Service read-only (remove save/delete methods)
+          const serviceFilePath = `${application.srcMainJava}${packagePath}/service/${entity.entityClass}Service.java`;
+
+          if (this.existsDestination(serviceFilePath)) {
+            this.log.info(`Making Service read-only for ${entity.name}`);
+            this.editFile(serviceFilePath, content => {
+              // Remove save method
+              content = this._removeMethod(content, 'public .+ save\\(');
+              // Remove partialUpdate method
+              content = this._removeMethod(content, 'public .+ partialUpdate\\(');
+              // Remove update method
+              content = this._removeMethod(content, 'public .+ update\\(');
+              // Remove delete method
+              content = this._removeMethod(content, 'public void delete\\(');
+
+              // Add comment to class indicating read-only
+              if (!content.includes('Read-only service for database view')) {
+                content = content.replace(
+                  /(@Service\n@Transactional)/,
+                  `/**\n * Read-only service for database view: ${entity.entityTableName}\n * Create/Update/Delete operations are not supported for views.\n */\n$1`
+                );
+              }
+
+              return content;
+            });
+          }
         }
       },
     });
+  }
+
+  /**
+   * Remove a method from Java source by its annotation
+   * @param {string} content - Java source code
+   * @param {string} annotation - Annotation to match (e.g., '@PostMapping')
+   * @returns {string} - Modified source code
+   */
+  _removeMethodByAnnotation(content, annotation) {
+    // Match annotation with optional parameters, followed by the method
+    // Pattern: annotation + optional whitespace/newlines + method signature + method body (balanced braces)
+    const annotationRegex = new RegExp(
+      `\\s*${annotation.replace('@', '@')}[^\\n]*\\n` + // Annotation line
+        `(?:\\s*@[A-Za-z]+[^\\n]*\\n)*` + // Optional additional annotations
+        `\\s*public[^{]+\\{` + // Method signature
+        `[^}]*(?:\\{[^}]*\\}[^}]*)*` + // Method body (handles nested braces one level)
+        `\\}`,
+      'g'
+    );
+
+    return content.replace(annotationRegex, '');
+  }
+
+  /**
+   * Remove a method from Java source by matching its signature pattern
+   * @param {string} content - Java source code
+   * @param {string} signaturePattern - Regex pattern for method signature
+   * @returns {string} - Modified source code
+   */
+  _removeMethod(content, signaturePattern) {
+    // Match method with optional annotations, signature, and body
+    const methodRegex = new RegExp(
+      `\\s*(?:@[A-Za-z]+[^\\n]*\\n)*` + // Optional annotations
+        `\\s*${signaturePattern}[^{]*\\{` + // Method signature
+        `[^}]*(?:\\{[^}]*\\}[^}]*)*` + // Method body (handles nested braces one level)
+        `\\}`,
+      'g'
+    );
+
+    return content.replace(methodRegex, '');
+  }
+
+  /**
+   * Remove unused imports from Java source
+   * @param {string} content - Java source code
+   * @returns {string} - Modified source code
+   */
+  _removeUnusedImports(content) {
+    const importsToCheck = [
+      'import org.springframework.web.bind.annotation.PostMapping;',
+      'import org.springframework.web.bind.annotation.PutMapping;',
+      'import org.springframework.web.bind.annotation.PatchMapping;',
+      'import org.springframework.web.bind.annotation.DeleteMapping;',
+      'import jakarta.validation.Valid;',
+      'import java.net.URI;',
+      'import java.net.URISyntaxException;',
+      'import tech.jhipster.web.util.HeaderUtil;',
+    ];
+
+    for (const importLine of importsToCheck) {
+      const className = importLine.match(/\.([A-Za-z]+);$/)?.[1];
+      if (className && !content.includes(`@${className}`) && !content.includes(`${className}.`) && !content.includes(`new ${className}`)) {
+        // Check if the class name is used anywhere (excluding the import itself)
+        const contentWithoutImport = content.replace(importLine, '');
+        if (!contentWithoutImport.includes(className)) {
+          content = content.replace(importLine + '\n', '');
+        }
+      }
+    }
+
+    return content;
   }
 }
