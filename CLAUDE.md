@@ -16,6 +16,10 @@ JHipsterでデータベースViewをサポートするブループリント。
 - [x] 統合テスト `@Disabled` 対応
 - [x] Liquibaseテーブル定義XML抑制
 - [x] fake-data削除
+- [x] MyBatis POJO生成 (`@Data` 付き)
+- [x] Mapper Interface生成（アノテーションベース）
+- [x] `.yo-rc.json` からの設定読み込み
+- [x] `application.yml` へのNeedle追記
 
 ## JDL構文
 
@@ -41,12 +45,79 @@ entity OrderStatistics {
 }
 ```
 
+## MyBatis対応
+
+### JDL構文
+
+```jdl
+@MyBatis
+entity Product { ... }
+
+@View
+@MyBatis
+entity ProductSummary { ... }
+```
+
+### アノテーション組み合わせ
+
+| JDLの記述 | JPA生成 | MyBatis生成 |
+|-----------|---------|-------------|
+| なし | Entity + Repository + REST | なし |
+| @View | Entity (@Immutable) + Repository + REST | なし |
+| @MyBatis | Entity + Repository + REST | POJO + Mapper (CRUD) |
+| @View + @MyBatis | Entity (@Immutable) + Repository + REST | POJO + Mapper (読み取り専用) |
+
+**重要**: `@MyBatis` はJPA生成の「置き換え」ではなく「追加生成」。マスタ管理画面はJPAベースで自動生成されるため、JPA Entityは常に必要。
+
+### 生成物の命名規則
+
+| 生成物 | パス | 命名規則 | 例 |
+|--------|------|----------|-----|
+| JPA Entity | `domain/` | `{Entity}.java` | `Customer.java` |
+| MyBatis POJO | `mybatis/model/` | `{Entity}Model.java` | `CustomerModel.java` |
+| Mapper Interface | `mybatis/mapper/` | `{Entity}ModelMapper.java` | `CustomerModelMapper.java` |
+
+### `.yo-rc.json` での設定
+
+```json
+{
+  "generator-jhipster": { ... },
+  "generator-jhipster-view-blueprint": {
+    "mybatis": {
+      "modelSuffix": "Model",
+      "mapperSuffix": "ModelMapper",
+      "modelPackage": "mybatis.model",
+      "mapperPackage": "mybatis.mapper"
+    }
+  }
+}
+```
+
+| 設定項目 | デフォルト値 | 説明 |
+|----------|-------------|------|
+| `modelSuffix` | `Model` | POJO クラス名の接尾辞 |
+| `mapperSuffix` | `ModelMapper` | Mapper Interface 名の接尾辞 |
+| `modelPackage` | `mybatis.model` | POJO のパッケージ（ベースパッケージからの相対） |
+| `mapperPackage` | `mybatis.mapper` | Mapper のパッケージ（ベースパッケージからの相対） |
+
+### `application.yml` への自動追記
+
+JHipsterのNeedle機能を使用して `application.yml` に追記：
+
+```yaml
+# jhipster-needle-application-properties
+mybatis:
+  type-aliases-package: com.example.mybatis.model
+  configuration:
+    map-underscore-to-camel-case: true
+```
+
 ## ブループリント構成
 
 ```
 generators/
 ├── server/
-│   └── generator.js      # サーバー側の読み取り専用化
+│   └── generator.js      # サーバー側の読み取り専用化、MyBatis生成
 └── liquibase/
     └── generator.js      # createView生成、テーブル定義抑制
 ```
@@ -66,8 +137,10 @@ generators/
 - REST APIから書き込みエンドポイントを削除 (`@PostMapping`, `@PutMapping`, `@PatchMapping`, `@DeleteMapping`)
 - Serviceから書き込みメソッドを削除 (`save`, `update`, `partialUpdate`, `delete`)
 - 統合テストに `@Disabled` アノテーションを追加
+- MyBatis POJO生成（`@MyBatis` アノテーション付きエンティティ）
+- Mapper Interface生成（Viewの場合は読み取り専用、通常は CRUD）
 
-**主要メソッド:**
+**主要メソッド（View対応）:**
 - `_addImmutableAnnotation()` - Entityに@Immutable追加
 - `_makeRestApiReadOnly()` - REST APIから書き込みエンドポイント削除
 - `_makeServiceReadOnly()` - Serviceから書き込みメソッド削除
@@ -75,6 +148,12 @@ generators/
 - `_removeMethodByAnnotation()` - アノテーションでメソッド削除
 - `_removeMethodBySignature()` - シグネチャでメソッド削除
 - `_removeUnusedImports()` - 未使用import削除
+
+**主要メソッド（MyBatis対応）:**
+- `_loadMyBatisConfig()` - .yo-rc.jsonから設定読み込み
+- `_generateMyBatisPojo()` - POJO生成
+- `_generateMapperInterface()` - Mapper Interface生成
+- `_appendMyBatisConfigToYaml()` - application.yml追記
 
 ### generators/liquibase/generator.js
 
@@ -151,3 +230,5 @@ Windows (CRLF) / Unix (LF) の行末記号を検出し、編集後も維持。
 - [JHipster Blueprint作成](https://www.jhipster.tech/modules/creating-a-blueprint/)
 - [Liquibase createView](https://docs.liquibase.com/change-types/create-view.html)
 - [Hibernate @Immutable](https://docs.jboss.org/hibernate/orm/current/userguide/html_single/Hibernate_User_Guide.html#entity-immutability)
+- [MyBatis公式ドキュメント](https://mybatis.org/mybatis-3/ja/)
+- [MyBatis Spring Boot Starter](https://mybatis.org/spring-boot-starter/mybatis-spring-boot-autoconfigure/)
