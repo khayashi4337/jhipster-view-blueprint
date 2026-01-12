@@ -1,8 +1,12 @@
 /**
  * JHipster View Blueprint - Server Generator
  * Adds @Immutable annotation to View entities and makes repositories read-only
+ * Also generates MyBatis POJOs and Mapper interfaces for entities with @MyBatis annotation
  */
 import BaseApplicationGenerator from 'generator-jhipster/generators/server';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 // Constants
 const HIBERNATE_IMMUTABLE_IMPORT = 'import org.hibernate.annotations.Immutable;';
@@ -10,10 +14,20 @@ const READ_ONLY_REPOSITORY_MARKER = 'Read-only repository for database view';
 const READ_ONLY_RESOURCE_MARKER = 'Read-only REST controller for database view';
 const READ_ONLY_SERVICE_MARKER = 'Read-only service for database view';
 
+// MyBatis default configuration
+const MYBATIS_DEFAULT_CONFIG = {
+  modelSuffix: 'Model',
+  mapperSuffix: 'ModelMapper',
+  modelPackage: 'mybatis.model',
+  mapperPackage: 'mybatis.mapper',
+};
+
 export default class extends BaseApplicationGenerator {
   constructor(args, opts, features) {
     super(args, opts, { ...features, sbsBlueprint: true });
     this._usagePatternCache = new Map();
+    this._myBatisConfig = null;
+    this._myBatisEntities = [];
   }
 
   get [BaseApplicationGenerator.PREPARING_EACH_ENTITY]() {
@@ -47,6 +61,23 @@ export default class extends BaseApplicationGenerator {
           }
           if (entity.viewSqlFile) {
             this.log.info(`  SQL File: ${entity.viewSqlFile}`);
+          }
+        }
+
+        // Check if entity has @MyBatis annotation
+        const isMyBatis = entity.annotations?.mybatis || entity.annotations?.MyBatis || entity.annotations?.Mybatis;
+        if (isMyBatis) {
+          this.log.info(`Marking entity ${entity.name} for MyBatis generation`);
+          entity.isMyBatis = true;
+
+          // Track MyBatis entities for later processing
+          this._myBatisEntities.push(entity);
+
+          // Log the combination with View
+          if (entity.isView) {
+            this.log.info(`  Entity ${entity.name} is a View + MyBatis combination (read-only mapper)`);
+          } else {
+            this.log.info(`  Entity ${entity.name} is MyBatis only (CRUD mapper)`);
           }
         }
       },
@@ -110,6 +141,52 @@ export default class extends BaseApplicationGenerator {
           } catch (error) {
             this.log.error(`Failed to modify integration test for ${entity.name}: ${error.message}`);
           }
+        }
+      },
+
+      async generateMyBatisFiles({ application, entities }) {
+        // Filter for MyBatis entities
+        const myBatisEntities = entities.filter(e =>
+          e.isMyBatis || e.annotations?.mybatis || e.annotations?.MyBatis || e.annotations?.Mybatis
+        );
+
+        if (myBatisEntities.length === 0) {
+          return;
+        }
+
+        this.log.info(`Generating MyBatis files for ${myBatisEntities.length} entities`);
+
+        // Load MyBatis configuration from .yo-rc.json
+        const myBatisConfig = this._loadMyBatisConfig();
+        const packagePath = application.packageName?.replace(/\./g, '/') || 'com/example/app';
+        const srcMainJava = application.srcMainJava || 'src/main/java/';
+
+        for (const entity of myBatisEntities) {
+          const isReadOnly = entity.isView || entity.annotations?.view || entity.annotations?.View;
+
+          // Generate MyBatis POJO
+          try {
+            this._generateMyBatisPojo(srcMainJava, packagePath, application.packageName, entity, myBatisConfig);
+            this.log.info(`Generated MyBatis POJO for ${entity.name}`);
+          } catch (error) {
+            this.log.error(`Failed to generate MyBatis POJO for ${entity.name}: ${error.message}`);
+          }
+
+          // Generate Mapper Interface
+          try {
+            this._generateMapperInterface(srcMainJava, packagePath, application.packageName, entity, myBatisConfig, isReadOnly);
+            this.log.info(`Generated MyBatis Mapper for ${entity.name} (${isReadOnly ? 'read-only' : 'CRUD'})`);
+          } catch (error) {
+            this.log.error(`Failed to generate MyBatis Mapper for ${entity.name}: ${error.message}`);
+          }
+        }
+
+        // Append MyBatis configuration to application.yml
+        try {
+          this._appendMyBatisConfigToYaml(application, myBatisConfig);
+          this.log.info('Appended MyBatis configuration to application.yml');
+        } catch (error) {
+          this.log.error(`Failed to append MyBatis config to application.yml: ${error.message}`);
         }
       },
     });
@@ -592,5 +669,402 @@ export default class extends BaseApplicationGenerator {
     }
 
     return content;
+  }
+
+  // ============================================
+  // MyBatis generation methods
+  // ============================================
+
+  /**
+   * Load MyBatis configuration from .yo-rc.json
+   * @returns {Object} - MyBatis configuration with defaults
+   */
+  _loadMyBatisConfig() {
+    if (this._myBatisConfig) {
+      return this._myBatisConfig;
+    }
+
+    // Try to read from .yo-rc.json
+    let config = { ...MYBATIS_DEFAULT_CONFIG };
+
+    try {
+      const yoRcPath = this.destinationPath('.yo-rc.json');
+      if (this.existsDestination('.yo-rc.json')) {
+        const yoRcContent = this.readDestination('.yo-rc.json');
+        const yoRc = JSON.parse(yoRcContent);
+        const blueprintConfig = yoRc['generator-jhipster-view-blueprint'];
+
+        if (blueprintConfig?.mybatis) {
+          config = {
+            ...MYBATIS_DEFAULT_CONFIG,
+            ...blueprintConfig.mybatis,
+          };
+          this.log.info('Loaded MyBatis configuration from .yo-rc.json');
+        }
+      }
+    } catch (error) {
+      this.log.warn(`Failed to load MyBatis config from .yo-rc.json: ${error.message}. Using defaults.`);
+    }
+
+    this._myBatisConfig = config;
+    return config;
+  }
+
+  /**
+   * Convert camelCase to snake_case
+   * Handles consecutive uppercase letters properly (e.g., XMLParser -> xml_parser)
+   * @param {string} str - camelCase string
+   * @returns {string} - snake_case string
+   */
+  _toSnakeCase(str) {
+    return str
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+      .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+      .toLowerCase()
+      .replace(/^_/, '');
+  }
+
+  /**
+   * Map JHipster field type to Java type for MyBatis POJO
+   * @param {Object} field - JHipster field object
+   * @returns {string} - Java type
+   */
+  _mapFieldTypeToJava(field) {
+    const typeMapping = {
+      String: 'String',
+      Integer: 'Integer',
+      Long: 'Long',
+      Float: 'Float',
+      Double: 'Double',
+      BigDecimal: 'java.math.BigDecimal',
+      LocalDate: 'java.time.LocalDate',
+      Instant: 'java.time.Instant',
+      ZonedDateTime: 'java.time.ZonedDateTime',
+      Duration: 'java.time.Duration',
+      UUID: 'java.util.UUID',
+      Boolean: 'Boolean',
+      Enum: field.fieldType, // Use actual enum type
+      byte: 'byte[]',
+      ByteBuffer: 'java.nio.ByteBuffer',
+    };
+
+    // Handle blob types
+    if (field.fieldTypeBlobContent) {
+      return 'byte[]';
+    }
+
+    return typeMapping[field.fieldType] || field.fieldType || 'Object';
+  }
+
+  /**
+   * Determine if a type needs to be imported
+   * @param {string} javaType - Java type string
+   * @returns {string|null} - Import statement or null if not needed
+   */
+  _getImportForType(javaType) {
+    // Primitive types and java.lang types don't need imports
+    if (!javaType || javaType.startsWith('java.lang.') || ['String', 'Integer', 'Long', 'Float', 'Double', 'Boolean', 'Object', 'byte[]'].includes(javaType)) {
+      return null;
+    }
+
+    // Types with full package path
+    if (javaType.includes('.')) {
+      return `import ${javaType};`;
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate MyBatis POJO class
+   * @param {string} srcMainJava - Source main java path
+   * @param {string} packagePath - Package path (e.g., 'com/example/app')
+   * @param {string} packageName - Package name (e.g., 'com.example.app')
+   * @param {Object} entity - Entity object
+   * @param {Object} config - MyBatis configuration
+   */
+  _generateMyBatisPojo(srcMainJava, packagePath, packageName, entity, config) {
+    const modelClassName = `${entity.entityClass}${config.modelSuffix}`;
+    const modelPackage = `${packageName}.${config.modelPackage}`;
+    const modelPackagePath = config.modelPackage.replace(/\./g, '/');
+    const filePath = `${srcMainJava}${packagePath}/${modelPackagePath}/${modelClassName}.java`;
+
+    // Detect line ending style (default to LF for new files)
+    const lineEnding = '\n';
+
+    // Collect imports for field types
+    const imports = new Set();
+    imports.add('import lombok.Data;');
+
+    // Generate fields
+    const fields = [];
+
+    // Add id field (typically Long for JHipster entities)
+    const idFieldType = entity.primaryKey?.type || 'Long';
+    fields.push(`    private ${idFieldType} id;`);
+
+    // Add entity fields
+    if (entity.fields) {
+      for (const field of entity.fields) {
+        const javaType = this._mapFieldTypeToJava(field);
+        const importStmt = this._getImportForType(javaType);
+        if (importStmt) {
+          imports.add(importStmt);
+        }
+
+        // Use simple type name in field declaration
+        const simpleType = javaType.includes('.') ? javaType.split('.').pop() : javaType;
+        fields.push(`    private ${simpleType} ${field.fieldName};`);
+      }
+    }
+
+    // Build the file content
+    const content = [
+      `package ${modelPackage};`,
+      '',
+      ...Array.from(imports).sort(),
+      '',
+      '/**',
+      ` * MyBatis POJO for ${entity.entityClass} entity.`,
+      entity.isView ? ' * This is a read-only model mapped to a database view.' : ' * This model is used for MyBatis data access.',
+      ' */',
+      '@Data',
+      `public class ${modelClassName} {`,
+      '',
+      fields.join(lineEnding),
+      '',
+      '}',
+      '',
+    ].join(lineEnding);
+
+    // Write the file
+    this.writeDestination(filePath, content);
+    this.log.debug(`Created MyBatis POJO: ${filePath}`);
+  }
+
+  /**
+   * Generate MyBatis Mapper interface
+   * @param {string} srcMainJava - Source main java path
+   * @param {string} packagePath - Package path (e.g., 'com/example/app')
+   * @param {string} packageName - Package name (e.g., 'com.example.app')
+   * @param {Object} entity - Entity object
+   * @param {Object} config - MyBatis configuration
+   * @param {boolean} isReadOnly - Whether this is a read-only mapper (for Views)
+   */
+  _generateMapperInterface(srcMainJava, packagePath, packageName, entity, config, isReadOnly) {
+    const modelClassName = `${entity.entityClass}${config.modelSuffix}`;
+    const mapperClassName = `${entity.entityClass}${config.mapperSuffix}`;
+    const modelPackage = `${packageName}.${config.modelPackage}`;
+    const mapperPackage = `${packageName}.${config.mapperPackage}`;
+    const mapperPackagePath = config.mapperPackage.replace(/\./g, '/');
+    const filePath = `${srcMainJava}${packagePath}/${mapperPackagePath}/${mapperClassName}.java`;
+    // Use JHipster's table name if available, otherwise convert from entity class name
+    const tableName = entity.entityTableName || this._toSnakeCase(entity.entityClass);
+
+    // Detect line ending style (default to LF for new files)
+    const lineEnding = '\n';
+
+    // Get the ID type from entity (supports Long, UUID, etc.)
+    const idType = entity.primaryKey?.type || 'Long';
+
+    // Build imports
+    const imports = [
+      `import ${modelPackage}.${modelClassName};`,
+      'import org.apache.ibatis.annotations.Mapper;',
+      'import org.apache.ibatis.annotations.Select;',
+    ];
+
+    if (!isReadOnly) {
+      imports.push('import org.apache.ibatis.annotations.Delete;');
+      imports.push('import org.apache.ibatis.annotations.Insert;');
+      imports.push('import org.apache.ibatis.annotations.Options;');
+      imports.push('import org.apache.ibatis.annotations.Update;');
+    }
+
+    imports.push('import java.util.List;');
+
+    // Add UUID import if the ID type is UUID
+    if (idType === 'UUID') {
+      imports.push('import java.util.UUID;');
+    }
+
+    imports.sort();
+
+    // Build methods
+    const methods = [];
+
+    // findAll method
+    methods.push('    /**');
+    methods.push('     * Retrieves all records.');
+    methods.push('     * @return List of all records');
+    methods.push('     */');
+    methods.push(`    @Select("SELECT * FROM ${tableName}")`);
+    methods.push(`    List<${modelClassName}> findAll();`);
+
+    // findById method
+    methods.push('');
+    methods.push('    /**');
+    methods.push('     * Retrieves a record by ID.');
+    methods.push('     * @param id the record ID');
+    methods.push('     * @return the record, or null if not found');
+    methods.push('     */');
+    methods.push(`    @Select("SELECT * FROM ${tableName} WHERE id = #{id}")`);
+    methods.push(`    ${modelClassName} findById(${idType} id);`);
+
+    if (!isReadOnly) {
+      // Generate INSERT columns and values from entity fields (exclude 'id' - auto-generated by database)
+      const insertColumns = [];
+      const insertValues = [];
+
+      if (entity.fields) {
+        for (const field of entity.fields) {
+          insertColumns.push(this._toSnakeCase(field.fieldName));
+          insertValues.push(`#{${field.fieldName}}`);
+        }
+      }
+
+      // insert method (only if there are fields to insert)
+      if (insertColumns.length > 0) {
+        methods.push('');
+        methods.push('    /**');
+        methods.push('     * Inserts a new record.');
+        methods.push(`     * @param ${entity.entityInstance} the record to insert`);
+        methods.push('     */');
+        methods.push(`    @Insert("INSERT INTO ${tableName} (${insertColumns.join(', ')}) VALUES (${insertValues.join(', ')})")`);
+        methods.push('    @Options(useGeneratedKeys = true, keyProperty = "id")');
+        methods.push(`    void insert(${modelClassName} ${entity.entityInstance});`);
+      } else {
+        this.log.info(`Entity ${entity.name} has no fields - skipping INSERT method generation`);
+      }
+
+      // Generate UPDATE SET clause
+      const updateSetParts = [];
+      if (entity.fields) {
+        for (const field of entity.fields) {
+          updateSetParts.push(`${this._toSnakeCase(field.fieldName)} = #{${field.fieldName}}`);
+        }
+      }
+
+      // update method (only if there are fields to update)
+      if (updateSetParts.length > 0) {
+        const updateSetClause = updateSetParts.join(', ');
+
+        methods.push('');
+        methods.push('    /**');
+        methods.push('     * Updates an existing record.');
+        methods.push(`     * @param ${entity.entityInstance} the record to update`);
+        methods.push('     */');
+        methods.push(`    @Update("UPDATE ${tableName} SET ${updateSetClause} WHERE id = #{id}")`);
+        methods.push(`    void update(${modelClassName} ${entity.entityInstance});`);
+      } else {
+        this.log.info(`Entity ${entity.name} has no fields - skipping UPDATE method generation`);
+      }
+
+      // deleteById method
+      methods.push('');
+      methods.push('    /**');
+      methods.push('     * Deletes a record by ID.');
+      methods.push('     * @param id the record ID');
+      methods.push('     */');
+      methods.push(`    @Delete("DELETE FROM ${tableName} WHERE id = #{id}")`);
+      methods.push(`    void deleteById(${idType} id);`);
+    }
+
+    // Build the file content
+    const classComment = isReadOnly
+      ? [
+          '/**',
+          ` * MyBatis Mapper for ${entity.entityClass} view.`,
+          ' * This is a read-only mapper - INSERT/UPDATE/DELETE operations are not supported.',
+          ' */',
+        ]
+      : [
+          '/**',
+          ` * MyBatis Mapper for ${entity.entityClass} entity.`,
+          ' * Provides CRUD operations via annotation-based SQL.',
+          ' */',
+        ];
+
+    const content = [
+      `package ${mapperPackage};`,
+      '',
+      ...imports,
+      '',
+      ...classComment,
+      '@Mapper',
+      `public interface ${mapperClassName} {`,
+      '',
+      methods.join(lineEnding),
+      '',
+      '}',
+      '',
+    ].join(lineEnding);
+
+    // Write the file
+    this.writeDestination(filePath, content);
+    this.log.debug(`Created MyBatis Mapper: ${filePath}`);
+  }
+
+  /**
+   * Append MyBatis configuration to application.yml using JHipster needle
+   * Tries multiple needle markers for compatibility, falls back to appending at end of file
+   * @param {Object} application - Application object
+   * @param {Object} config - MyBatis configuration
+   */
+  _appendMyBatisConfigToYaml(application, config) {
+    const packageName = application.packageName || 'com.example.app';
+    const modelPackage = `${packageName}.${config.modelPackage}`;
+
+    // Build YAML content to append
+    const yamlContent = [
+      'mybatis:',
+      `  type-aliases-package: ${modelPackage}`,
+      '  configuration:',
+      '    map-underscore-to-camel-case: true',
+    ].join('\n');
+
+    // Paths to check
+    const configPath = 'src/main/resources/config/application.yml';
+
+    if (!this.existsDestination(configPath)) {
+      this.log.warn(`application.yml not found at ${configPath}. Skipping MyBatis config append.`);
+      return;
+    }
+
+    this.editFile(configPath, content => {
+      // Detect line ending style
+      const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
+
+      // Check if mybatis config already exists
+      if (content.includes('mybatis:')) {
+        this.log.debug('MyBatis configuration already exists in application.yml');
+        return content;
+      }
+
+      // List of JHipster needle markers to try (in order of preference)
+      // Different JHipster versions may use different needle names
+      const needleMarkers = [
+        '# jhipster-needle-application-properties',
+        '# jhipster-needle-add-application-yaml-document',
+      ];
+
+      // Try each needle marker
+      for (const needleMarker of needleMarkers) {
+        if (content.includes(needleMarker)) {
+          const insertContent = yamlContent.split('\n').join(lineEnding) + lineEnding + lineEnding;
+          content = content.replace(needleMarker, insertContent + needleMarker);
+          this.log.debug(`Inserted MyBatis config before needle: ${needleMarker}`);
+          return content;
+        }
+      }
+
+      // Fallback: append at the end of the file
+      // This handles cases where no needle marker is found
+      const insertContent = lineEnding + yamlContent.split('\n').join(lineEnding) + lineEnding;
+      content = content + insertContent;
+      this.log.debug('No JHipster needle found - appended MyBatis config at end of file');
+
+      return content;
+    });
   }
 }
