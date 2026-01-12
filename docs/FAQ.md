@@ -26,6 +26,56 @@ public class UserSummary { ... }
 | `@Sql("...")` | SQLが1〜2行の短いとき |
 | `@SqlFile("path/to/file.sql")` | SQLが複雑なとき、コメントを残したいとき |
 
+## MyBatis関連
+
+### Q: @MyBatisを使うとJPAエンティティは生成されない？
+
+**A:** いいえ、両方生成されます。@MyBatisはJPA生成の「置き換え」ではなく「追加」です。マスタ管理画面はJPAベースで自動生成されるため、JPA Entityは常に必要です。
+
+### Q: MyBatis POJOとJPA Entityの違いは？
+
+**A:**
+
+| 項目 | JPA Entity | MyBatis POJO |
+|------|-----------|--------------|
+| パッケージ | domain/ | mybatis/model/ |
+| アノテーション | @Entity, @Table | @Data (Lombok) |
+| EntityManager | 管理対象 | 管理対象外 |
+| 用途 | マスタ管理 | 業務ロジック |
+
+### Q: Mapper XMLは生成される？
+
+**A:** いいえ。アノテーションベースのMapper Interfaceのみ生成されます。複雑なSQLはマテリアルビューとして定義し、Mapperはシンプルに保つ設計です。
+
+### Q: @View + @MyBatis と @MyBatis のみ、何が違う？
+
+**A:**
+
+- @View + @MyBatis: 読み取り専用Mapper (findAll, findById のみ)
+- @MyBatis のみ: CRUD Mapper (findAll, findById, insert, update, deleteById)
+
+### Q: ModelやMapperの命名を変えたい
+
+**A:** `.yo-rc.json` で設定できます：
+
+```json
+{
+  "generator-jhipster-view-blueprint": {
+    "mybatis": {
+      "modelSuffix": "Dto",
+      "mapperSuffix": "DtoMapper"
+    }
+  }
+}
+```
+
+### Q: MyBatisクラスが生成されない
+
+**A:** 以下を確認してください：
+
+1. JDLに `@MyBatis` アノテーションがあるか
+2. ブループリントが正しくインストールされているか
+
 ## トラブルシューティング
 
 ### Q: "Entity file not found" エラーが出る
@@ -83,6 +133,18 @@ entity MyView { ... }
 ```
 
 ただし、`@SqlFile` で参照するファイルにCREATE VIEW文を書いた場合は、自動でSELECT部分が抽出されます。
+
+### Q: "mybatis" package not found エラー
+
+**A:** MyBatis Spring Boot Starterの依存関係を追加してください：
+
+```xml
+<dependency>
+    <groupId>org.mybatis.spring.boot</groupId>
+    <artifactId>mybatis-spring-boot-starter</artifactId>
+    <version>3.0.3</version>
+</dependency>
+```
 
 ## アーキテクチャ
 

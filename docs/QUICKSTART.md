@@ -1,6 +1,6 @@
 # クイックスタート
 
-5分でJHipster View Blueprintを使い始める。
+10分でJHipster View Blueprintを使い始める。
 
 ## 前提条件
 
@@ -58,6 +58,23 @@ entity ExampleCustomer {
     name String
     email String
 }
+
+// ★ MyBatis CRUD エンティティ
+@MyBatis
+entity Product {
+    name String required
+    price BigDecimal required
+    stock Integer
+}
+
+// ★ View + MyBatis（読み取り専用）
+@View
+@Sql("SELECT c.id, c.name, COUNT(o.id) as order_count FROM customer c LEFT JOIN jhi_order o ON c.id = o.customer_id GROUP BY c.id, c.name")
+@MyBatis
+entity CustomerOrderSummary {
+    name String
+    orderCount Integer
+}
 ```
 
 ## ステップ3: アプリケーション生成
@@ -77,6 +94,12 @@ grep -n "Immutable" src/main/java/com/example/myapp/domain/ExampleCustomer.java
 
 # Liquibase changelogにcreateViewがあるか確認
 cat src/main/resources/config/liquibase/changelog/*create_view*.xml
+
+# MyBatis POJOが生成されたか確認
+ls src/main/java/com/example/myapp/mybatis/model/
+
+# Mapper Interfaceが生成されたか確認
+ls src/main/java/com/example/myapp/mybatis/mapper/
 ```
 
 ## 複雑なSQLの場合
@@ -110,7 +133,25 @@ entity CustomerSummary {
 }
 ```
 
+## MyBatis設定のカスタマイズ
+
+命名規則を変更したい場合は `.yo-rc.json` に設定を追加：
+
+```json
+{
+  "generator-jhipster-view-blueprint": {
+    "mybatis": {
+      "modelSuffix": "Model",
+      "mapperSuffix": "ModelMapper",
+      "modelPackage": "mybatis.model",
+      "mapperPackage": "mybatis.mapper"
+    }
+  }
+}
+```
+
 ## 次のステップ
 
+- [MyBatis設計メモ](MYBATIS_DESIGN.md) - MyBatis対応の詳細
 - [FAQ](FAQ.md) - 困ったときに
 - [README](../README.md) - 詳細な説明
